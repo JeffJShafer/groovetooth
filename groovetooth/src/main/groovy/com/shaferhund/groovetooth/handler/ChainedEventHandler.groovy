@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentMap
 
 abstract class ChainedEventHandler<T> extends Handler {
     ChainedEventHandler parent
-    ChainedEventHandler child
+    Map<String, ChainedEventHandler> children
 
     ConcurrentMap<T, List<Closure>> handlerMap = new ConcurrentHashMap<>()
 
@@ -19,7 +19,7 @@ abstract class ChainedEventHandler<T> extends Handler {
     @Override
     void handleMessage(Message msg) {
 
-        child?.handleMessage(msg)
+        parent?.handleMessage(msg)
 
         T key = keyAdapter(msg)
 
@@ -45,13 +45,13 @@ abstract class ChainedEventHandler<T> extends Handler {
         return handlerMap[key] ?: []
     }
 
-    void leftShift(ChainedEventHandler child) {
-        this.child = child
+    void leftShift(ChainedEventHandler child, Object o) {
+        children[UUID.randomUUID().toString()] = child
         child.parent = this
     }
 
     void rightShift(ChainedEventHandler parent) {
         this.parent = parent
-        parent.child = this
+        parent << this
     }
 }

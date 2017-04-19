@@ -2,17 +2,23 @@ package com.shaferhund.groovetooth.config
 
 import android.bluetooth.BluetoothAdapter
 import com.shaferhund.groovetooth.BluetoothConnection
+import com.shaferhund.groovetooth.handler.BluetoothConnectionHandler
+
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentMap
 
 public class BluetoothManagerConfig {
-    BluetoothConnection connection = new BluetoothConnection()
+    ConcurrentMap<UUID, BluetoothConnection> connections = new ConcurrentHashMap<>()
     BluetoothAdapter adapter
 
-    BluetoothConnection getConnection() {
-        return connection
+    BluetoothConnectionHandler rootHandler = new BluetoothConnectionHandler()
+
+    ConcurrentMap<UUID, BluetoothConnection> getConnections() {
+        return connections
     }
 
-    void setConnection(BluetoothConnection connection) {
-        this.connection = connection
+    BluetoothConnectionHandler getHandler() {
+        return rootHandler
     }
 
     BluetoothManagerConfig(BluetoothAdapter adapter) {

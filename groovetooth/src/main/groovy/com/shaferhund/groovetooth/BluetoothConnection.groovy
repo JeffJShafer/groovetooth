@@ -6,17 +6,23 @@ import android.bluetooth.BluetoothSocket
 import android.os.Bundle
 import android.os.Message
 import android.util.Log
+import com.shaferhund.groovetooth.config.BluetoothMessageConfig
 import com.shaferhund.groovetooth.consumer.MessagingStreamConsumer
 import com.shaferhund.groovetooth.consumer.ThreadedStreamConsumer
 import com.shaferhund.groovetooth.enums.ConnectionState
 import com.shaferhund.groovetooth.enums.MessageType
 import com.shaferhund.groovetooth.handler.BluetoothConnectionHandler
 
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+
 class BluetoothConnection {
     BluetoothAdapter adapter
 
     String address
     String uuid
+
+    String connectionId
 
     BluetoothConnectionHandler handler = new BluetoothConnectionHandler()
     ThreadedStreamConsumer streamReader
@@ -110,15 +116,25 @@ class BluetoothConnection {
         }
     }
 
-    void write(BluetoothMessage message) {
-        write(message.data)
+    void send(@DelegatesTo(BluetoothMessageConfig.class) final Closure closure) {
+        BluetoothMessageConfig messageConfig = new BluetoothMessageConfig()
+        closure.setDelegate(messageConfig)
+        closure.setResolveStrategy(Closure.DELEGATE_FIRST)
+        closure()
+
+        handler.children[messageConfig.message.id.toString()] = messageConfig.message.handler
+
+        write(messageConfig.message)
     }
 
-    void write(byte[] data) {
+    void write(BluetoothMessage message) {
         try {
             if (outputStream) {
-                outputStream.write(data)
-                handler.obtainMessage(MessageType.WRITE.stateId, -1, -1, data).sendToTarget()
+                byte[] id = message.id.toString().getBytes(StandardCharsets.UTF_8)
+                byte[] len = ByteBuffer.allocate(4).putInt(id.length).array()
+                byte[] out = len + id + message.data
+                outputStream.write(out)
+                message.handler.obtainMessage(MessageType.WRITE.stateId, -1, -1, out).sendToTarget()
             }
         }
         catch (IOException e) {
