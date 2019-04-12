@@ -3,13 +3,16 @@ package com.shaferhund.groovetooth
 import android.bluetooth.BluetoothAdapter
 import com.shaferhund.groovetooth.config.BluetoothConnectionConfig
 import com.shaferhund.groovetooth.config.BluetoothManagerConfig
-import com.shaferhund.groovetooth.config.BluetoothMessageConfig
+import com.shaferhund.groovetooth.enums.ConnectionState
+import com.shaferhund.groovetooth.handler.BluetoothConnectionHandler
 
-public class BluetoothConnectionManager {
+class BluetoothConnectionManager {
 
     static final Closure<BluetoothConnectionManager> factory = BluetoothConnectionManager.metaClass.&invokeConstructor as Closure<BluetoothConnectionManager>
 
     BluetoothManagerConfig config
+
+
 
     BluetoothConnectionManager(BluetoothManagerConfig config) {
         this.config = config
@@ -19,8 +22,8 @@ public class BluetoothConnectionManager {
     }
 
     static BluetoothConnectionManager configure(@DelegatesTo(BluetoothManagerConfig.class) final Closure closure) {
-        BluetoothAdapter mAdapter = BluetoothAdapter.getDefaultAdapter()
-        BluetoothManagerConfig bluetoothManagerConfig = new BluetoothManagerConfig(mAdapter)
+        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter()
+        BluetoothManagerConfig bluetoothManagerConfig = new BluetoothManagerConfig(adapter)
         closure.setDelegate(bluetoothManagerConfig)
         closure.setResolveStrategy(Closure.DELEGATE_FIRST)
 
@@ -44,12 +47,58 @@ public class BluetoothConnectionManager {
         return config.connections
     }
 
-    void listen(@DelegatesTo(BluetoothManagerConfig.class) final Closure closure) {
-        closure.setDelegate(config)
+    BluetoothConnection connectionByHashCode(int hashcode) {
+        return connections.find { k, v -> k.hashCode() == hashCode()}.value
+    }
+
+    BluetoothConnectionHandler getRootHandler() {
+        return config.rootHandler
+    }
+
+    BluetoothConnection listen(@DelegatesTo(BluetoothConnectionConfig.class) final Closure closure) {
+        BluetoothConnectionConfig connectionConfig = new BluetoothConnectionConfig(adapter)
+        closure.setDelegate(connectionConfig)
         closure.setResolveStrategy(Closure.DELEGATE_FIRST)
         closure()
 
-        config.connection.listen()
+        BluetoothConnection existingConnection = connections[connectionConfig.connection.connectionId]
+
+        //If not specifying additional handlers, calling connect on a completed or pending connection
+        //with an identical configuration will return that connection
+        if (existingConnection?.state in [ConnectionState.CONNECTED, ConnectionState.CONNECTING]) {
+            if (connectionConfig.connection.handler == null || connectionConfig.connection.handler.handlerMap.isEmpty()) {
+                connectionConfig.connection.handler = existingConnection.handler
+            }
+
+            if (connectionConfig.connection != existingConnection) {
+                throw new IllegalArgumentException("Attempting to reconfigure connection with id ${connection.connectionId} while already connected or connecting")
+            }
+            else {
+                return existingConnection
+            }
+        }
+        else if (existingConnection?.state == ConnectionState.LISTEN) {
+            existingConnection.stopThreads()
+        }
+        //Reconfigure preexisting connection (if not connected/connecting), add new handlers to existing set
+        //and attempt to connect
+        else if (existingConnection) {
+            connectionConfig = new BluetoothConnectionConfig(adapter, existingConnection)
+            closure.setDelegate(connectionConfig)
+            closure.call()
+        }
+
+        BluetoothConnection connection = connectionConfig.connection
+
+        connections[connection.connectionId] = connection
+        rootHandler.children[connection.connectionId] = connection.handler
+        connection.handler.parent = rootHandler
+
+        connection.uuid ?: config.uuid
+
+        connection.listen()
+
+        return connection
     }
 
     BluetoothConnection connect(@DelegatesTo(BluetoothConnectionConfig.class) final Closure closure) {
@@ -58,26 +107,50 @@ public class BluetoothConnectionManager {
         closure.setResolveStrategy(Closure.DELEGATE_FIRST)
         closure.call()
 
-        String connectionId = connectionConfig.connection.connectionId ?: UUID.randomUUID().toString()
-        connectionConfig.connectionId = connectionId
+        BluetoothConnection existingConnection = connections[connectionConfig.connection.connectionId]
 
-        config.connections[connectionId] = connectionConfig.connection
-        config.rootHandler << connectionConfig.connection.handler
+        //If not specifying additional handlers, calling connect on a completed or pending connection
+        //with an identical configuration will return that connection
+        if (existingConnection?.state in [ConnectionState.CONNECTED, ConnectionState.CONNECTING]) {
+            if (connectionConfig.connection.handler.subsetOf(existingConnection.handler)) {
+                connectionConfig.connection.handler = existingConnection.handler
+            }
 
-        connectionConfig.connection.connect()
+            if (connectionConfig.connection != existingConnection) {
+                throw new IllegalArgumentException("Attempting to reconfigure connection with id ${existingConnection.connectionId} while already connected or connecting")
+            }
+            else {
+                return existingConnection
+            }
+        }
 
-        return connectionConfig.connection
+        else if (existingConnection?.state == ConnectionState.LISTEN) {
+            existingConnection.stopThreads()
+
+            connectionConfig = new BluetoothConnectionConfig(adapter, existingConnection)
+            closure.setDelegate(connectionConfig)
+            closure.call()
+        }
+        //Reconfigure preexisting connection (if not connected/connecting), add new handlers to existing set
+        //and attempt to connect
+        else if (existingConnection) {
+            connectionConfig = new BluetoothConnectionConfig(adapter, existingConnection)
+            closure.setDelegate(connectionConfig)
+            closure.call()
+        }
+
+        BluetoothConnection connection = connectionConfig.connection
+
+        connections[connection.connectionId] = connection
+        rootHandler.children[connection.connectionId] = connection.handler
+        connection.handler.parent = rootHandler
+
+
+        connection.uuid = connection.uuid ?: config.uuid
+
+        connection.connect()
+
+        return connection
     }
-
-/*    void send(@DelegatesTo(BluetoothMessageConfig.class) final Closure closure) {
-        BluetoothMessageConfig messageConfig = new BluetoothMessageConfig()
-        closure.setDelegate(messageConfig)
-        closure.setResolveStrategy(Closure.DELEGATE_FIRST)
-        closure()
-
-        config.connection.handler << messageConfig.message.handler
-
-        config.connection.write(messageConfig.message)
-    }*/
 }
 

@@ -2,6 +2,7 @@ package com.shaferhund.groovetooth
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.os.Bundle
 import android.os.Message
@@ -12,26 +13,29 @@ import com.shaferhund.groovetooth.consumer.ThreadedStreamConsumer
 import com.shaferhund.groovetooth.enums.ConnectionState
 import com.shaferhund.groovetooth.enums.MessageType
 import com.shaferhund.groovetooth.handler.BluetoothConnectionHandler
+import groovy.transform.Memoized
 
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
 class BluetoothConnection {
+    static final String TAG = "BluetoothConnection"
+
     BluetoothAdapter adapter
 
     String address
     String uuid
 
-    String connectionId
+    String connectionId = UUID.randomUUID().toString()
 
     BluetoothConnectionHandler handler = new BluetoothConnectionHandler()
     ThreadedStreamConsumer streamReader
     OutputStream outputStream
 
-    ConnectionState currentState
+    BluetoothSocket connectSocket
+    BluetoothServerSocket serverSocket
 
-    Thread listenThread
-    Thread connectThread
+    ConnectionState currentState
 
     BluetoothConnection() {
 
@@ -42,6 +46,7 @@ class BluetoothConnection {
         this.streamReader = new MessagingStreamConsumer()
     }
 
+    @Memoized
     BluetoothDevice getDevice() {
         return address ? adapter.getRemoteDevice(address) : null
     }
@@ -54,10 +59,16 @@ class BluetoothConnection {
         return streamReader
     }
 
-    synchronized void setState(ConnectionState newState) {
-        Log.d("BluetoothConnection", "State transition: [ ${this.currentState?.name()} -> ${newState.name()} ]")
+    void close() {
+        connectSocket?.close()
+        serverSocket?.close()
+        state = ConnectionState.NONE
+    }
 
-        handler.obtainMessage(MessageType.STATE_CHANGE.stateId, newState.stateId, currentState?.stateId ?: ConnectionState.NONE.stateId).sendToTarget()
+    synchronized void setState(ConnectionState newState) {
+        Log.d(TAG, "State transition: [ ${state.name()} -> ${newState.name()} ]")
+
+        handler.obtainMessage(MessageType.STATE_CHANGE.stateId, state.stateId, newState.stateId, connectionId).sendToTarget()
 
         currentState = newState
     }
@@ -67,12 +78,14 @@ class BluetoothConnection {
     }
 
     synchronized void listen() {
-        listenThread = Thread.start {
+        Thread.start {
             try {
-                if (state in [ConnectionState.CONNECTING, ConnectionState.CONNECTED]) {
+                if (state.notIn(ConnectionState.CONNECTING, ConnectionState.CONNECTED)) {
                     state = ConnectionState.LISTEN
 
-                    BluetoothSocket socket = adapter.listenUsingRfcommWithServiceRecord('Bluetooth Secure', UUID.fromString(uuid)).accept()
+                    serverSocket = adapter.listenUsingRfcommWithServiceRecord('Bluetooth Secure', UUID.fromString(uuid))
+                    connectSocket = serverSocket.accept()
+                    serverSocket.close()
 
                     Message msg = handler.obtainMessage(MessageType.DEVICE_NAME.stateId)
                     Bundle bundle = new Bundle()
@@ -81,58 +94,69 @@ class BluetoothConnection {
                     msg.setData(bundle)
                     handler.sendMessage(msg)
 
-                    outputStream = socket.outputStream
-                    Thread.startDaemon { reader.consumerFor(socket.inputStream, handler).run() }
+                    outputStream = connectSocket.outputStream
+                    Thread.startDaemon { reader.consumerFor(connectSocket.inputStream, handler).run() }
 
                     state = ConnectionState.CONNECTED
                 }
             }
             catch (IOException e) {
-                Log.i("BluetoothConnection", e.toString())
+                Log.i(TAG, e.toString())
                 state = ConnectionState.NONE
             }
         }
     }
 
     synchronized void connect() {
-        connectThread = Thread.start {
+        serverSocket?.close()
+        Thread.start {
             try {
                 state = ConnectionState.CONNECTING
                 adapter.cancelDiscovery()
-                BluetoothSocket socket = device.createRfcommSocketToServiceRecord(UUID.fromString(uuid))
+                connectSocket = device.createRfcommSocketToServiceRecord(UUID.fromString(uuid))
 
-                socket.connect()
+                connectSocket.connect()
 
-                Log.d("BluetoothConnection", "Socket connected: ${socket.remoteDevice.address}")
-                outputStream = socket.outputStream
-                Thread.startDaemon { reader.consumerFor(socket.inputStream, handler).run() }
+                Log.d(TAG, "Socket connected: ${connectSocket.remoteDevice.address}")
+
+                outputStream = connectSocket.outputStream
+                Thread.startDaemon { reader.consumerFor(connectSocket.inputStream, handler).run() }
                 state = ConnectionState.CONNECTED
 
             }
             catch (IOException e) {
-                Log.i("BluetoothConnection", e.toString())
+                Log.i(TAG, e.toString())
                 state = ConnectionState.NONE
             }
         }
     }
 
-    void send(@DelegatesTo(BluetoothMessageConfig.class) final Closure closure) {
+    BluetoothMessage send(@DelegatesTo(BluetoothMessageConfig.class) final Closure closure) {
         BluetoothMessageConfig messageConfig = new BluetoothMessageConfig()
         closure.setDelegate(messageConfig)
         closure.setResolveStrategy(Closure.DELEGATE_FIRST)
         closure()
 
-        handler.children[messageConfig.message.id.toString()] = messageConfig.message.handler
+        BluetoothMessage message = messageConfig.message
 
-        write(messageConfig.message)
+        handler.children[message.id] = message.handler
+
+        write(message)
+
+        return message
     }
 
     void write(BluetoothMessage message) {
         try {
             if (outputStream) {
-                byte[] id = message.id.toString().getBytes(StandardCharsets.UTF_8)
-                byte[] len = ByteBuffer.allocate(4).putInt(id.length).array()
-                byte[] out = len + id + message.data
+                byte[] id = message.id.getBytes(StandardCharsets.UTF_8)
+
+                byte[] out = ByteBuffer.allocate(4 + id.length + message.data.length)
+                        .putInt(id.length)
+                        .put(id)
+                        .put(message.data)
+                        .array()
+
                 outputStream.write(out)
                 message.handler.obtainMessage(MessageType.WRITE.stateId, -1, -1, out).sendToTarget()
             }
@@ -140,5 +164,41 @@ class BluetoothConnection {
         catch (IOException e) {
             Log.e(this.class.name, e.toString())
         }
+    }
+
+    @Override
+    boolean equals(Object obj) {
+        if (!(obj instanceof BluetoothConnection)) {
+            return false
+        }
+        BluetoothConnection other = obj as BluetoothConnection
+
+        if (this.address != other.address) {
+            return false
+        }
+        if (this.connectionId != other.connectionId) {
+            return false
+        }
+        if (this.adapter != other.adapter) {
+            return false
+        }
+        if (this.reader != other.reader) {
+            return false
+        }
+        if (this.handler != other.handler) {
+            return false
+        }
+
+        return true
+    }
+
+    @Override
+    int hashCode() {
+        int code = this.address.hashCode()
+        code ^= this.connectionId.hashCode()
+        code ^= this.adapter.hashCode()
+        code ^= this.reader.hashCode()
+        code ^= this.handler.hashCode()
+        reader code
     }
 }

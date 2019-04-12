@@ -1,5 +1,9 @@
 package com.shaferhund.groovetooth.enums
 
+import com.shaferhund.groovetooth.state.StateTransition
+import groovy.transform.CompileStatic
+
+@CompileStatic
 enum ConnectionState {
     NONE(0),
     LISTEN (1),
@@ -19,7 +23,11 @@ enum ConnectionState {
         return values().find { it.stateId == stateId }
     }
 
-    Tuple2<ConnectionState, ConnectionState> rightShiftUnsigned(ConnectionState newState) {
-        return new Tuple2(this, newState)
+    StateTransition<ConnectionState> rightShiftUnsigned(ConnectionState newState) {
+        return new StateTransition<ConnectionState>(this, newState)
+    }
+
+    boolean notIn(ConnectionState... states) {
+        return !(this in states)
     }
 }

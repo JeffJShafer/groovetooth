@@ -7,22 +7,19 @@ import com.shaferhund.groovetooth.handler.BluetoothConnectionHandler
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentMap
 
-public class BluetoothManagerConfig {
-    ConcurrentMap<UUID, BluetoothConnection> connections = new ConcurrentHashMap<>()
+class BluetoothManagerConfig {
+    ConcurrentMap<String, BluetoothConnection> connections = new ConcurrentHashMap<>()
     BluetoothAdapter adapter
+
+    String uuid
 
     BluetoothConnectionHandler rootHandler = new BluetoothConnectionHandler()
 
-    ConcurrentMap<UUID, BluetoothConnection> getConnections() {
+    ConcurrentMap<String, BluetoothConnection> getConnections() {
         return connections
-    }
-
-    BluetoothConnectionHandler getHandler() {
-        return rootHandler
     }
 
     BluetoothManagerConfig(BluetoothAdapter adapter) {
         this.adapter = adapter
-        connection.adapter = adapter
     }
 }

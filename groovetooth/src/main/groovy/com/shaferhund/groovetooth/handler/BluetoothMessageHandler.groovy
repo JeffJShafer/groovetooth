@@ -4,7 +4,7 @@ import android.os.Message
 import com.shaferhund.groovetooth.enums.MessageType
 
 
-public class BluetoothMessageHandler extends ChainedEventHandler<MessageType> {
+class BluetoothMessageHandler extends ChainedEventHandler<MessageType> {
 
     @Override
     MessageType keyAdapter(Message msg) {
